@@ -118,6 +118,9 @@ export class MaxPiso2Loader {
     this.mirrorSpecs = [];
     this.mirrorsGroup = new THREE.Group();
     this.mirrorsGroup.name = 'Espejos_Piso2_3dsMax';
+    this.colliderGrid = new Map();
+    this.colliderCellSize = 2.0;
+    this.colliderSegmentsCount = 0;
     this.mirrorsGroup.visible = false;
     this._renderingMirror = false;
     this.materialsByName = new Map();
@@ -594,11 +597,12 @@ export class MaxPiso2Loader {
           if (this.app?.scene && !this.mirrorsGroup.parent) {
             this.app.scene.add(this.mirrorsGroup);
           }
+          this._buildCollisionGrid();
           this.loaded = true;
           if (this.app?.tour?.mode === 'room' && this.app.tour.current) {
             this.focusRoom(true, this.app.tour.current);
           }
-          console.info(`[3ds Max Piso 2] Espejos Reflector creados: ${this.mirrorSpecs.length}`);
+          console.info(`[3ds Max Piso 2] Espejos Reflector creados: ${this.mirrorSpecs.length} · Segmentos de colisión 3D: ${this.colliderSegmentsCount}`);
           resolve(this.group);
         },
         (xhr) => {
@@ -632,6 +636,273 @@ export class MaxPiso2Loader {
     this._ceilVis = b;
     for (const m of this.ceilingMeshes) m.visible = b;
     if (this.app?.renderer) this.app.renderer.shadowMap.needsUpdate = true;
+  }
+
+  /**
+   * Construye una grilla espacial de colisión 2D cortando los triángulos reales de muros, tabiques,
+   * ventanales, puertas y mobiliario de 3ds Max en los planos horizontales de paso (y = 3.48, 3.75, 4.25 m).
+   * Evita por completo atravesar paredes, muebles o puertas cerradas como un fantasma.
+   */
+  _buildCollisionGrid() {
+    this.colliderGrid.clear();
+    this.colliderSegmentsCount = 0;
+    const tmpBox = new THREE.Box3();
+
+    for (const obj of this.interactiveMeshes) {
+      if (!obj.geometry || obj.userData?.isCeiling) continue;
+      const nm = obj.name || '';
+      const matName = (Array.isArray(obj.material) ? obj.material[0]?.name : obj.material?.name) || '';
+      const tag = `${nm}|${matName}`;
+
+      // Ignorar emisores LED, cojines sueltos, cortinas (el ventanal detrás ya bloquea), vajilla y herrajes pequeños
+      if (/^Luz$|Difusor_LED|Cortina|Hunter|Grupo#1014|skp399|Velvet_03_Blue|Componente#14$|fabric_0[12]|Grupo#7[15]|Cup|Coffee|Pitcher|Glass 05|Glass 134|Herraje|faceplate|duplex_receptacle|lutron|\blite\b/i.test(tag)) {
+        continue;
+      }
+
+      if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+      const bb = obj.geometry.boundingBox;
+      if (!bb) continue;
+
+      tmpBox.copy(bb).applyMatrix4(obj.matrixWorld);
+      const sx = tmpBox.max.x - tmpBox.min.x;
+      const sy = tmpBox.max.y - tmpBox.min.y;
+      const sz = tmpBox.max.z - tmpBox.min.z;
+
+      // Descartar pisos/alfombras planas, elementos por encima de la cabeza o accesorios diminutos
+      if (sy < 0.22 || Math.max(sx, sz) < 0.26 || tmpBox.max.y < 3.38 || tmpBox.min.y > 4.75) continue;
+
+      const isDoorLeaf = /Hoja|Puerta|Door|Doble_Grupo#22$|Doble_mesh_name_undefined_123$|Sencilla_mesh_name_undefined_131$|Sencilla_Grupo#63$|Sencilla_Grupo#21$|Puertas_Referencia/i.test(tag);
+      if (isDoorLeaf) {
+        this._extractMeshSliceSegments(obj, [4.25], obj);
+      } else if (tmpBox.max.y >= 4.18 && tmpBox.min.y <= 4.30) {
+        this._extractMeshSliceSegments(obj, [4.25], null);
+      } else {
+        this._extractMeshSliceSegments(obj, [3.48, 3.75], null);
+      }
+    }
+  }
+
+  _extractMeshSliceSegments(mesh, yPlanes, doorMesh = null) {
+    const geo = mesh.geometry;
+    const pos = geo?.attributes?.position;
+    if (!pos || pos.count < 3) return;
+    const idx = geo.index ? geo.index.array : null;
+    const triCount = idx ? Math.floor(idx.length / 3) : Math.floor(pos.count / 3);
+    if (triCount > 45000) return;
+
+    const m = mesh.matrixWorld.elements;
+    const m00 = m[0], m01 = m[1], m02 = m[2];
+    const m04 = m[4], m05 = m[5], m06 = m[6];
+    const m08 = m[8], m09 = m[9], m10 = m[10];
+    const m12 = m[12], m13 = m[13], m14 = m[14];
+
+    for (let t = 0; t < triCount; t++) {
+      const i0 = idx ? idx[t * 3] : t * 3;
+      const i1 = idx ? idx[t * 3 + 1] : t * 3 + 1;
+      const i2 = idx ? idx[t * 3 + 2] : t * 3 + 2;
+
+      const lx0 = pos.getX(i0), ly0 = pos.getY(i0), lz0 = pos.getZ(i0);
+      const lx1 = pos.getX(i1), ly1 = pos.getY(i1), lz1 = pos.getZ(i1);
+      const lx2 = pos.getX(i2), ly2 = pos.getY(i2), lz2 = pos.getZ(i2);
+
+      const y0 = m01 * lx0 + m05 * ly0 + m09 * lz0 + m13;
+      const y1 = m01 * lx1 + m05 * ly1 + m09 * lz1 + m13;
+      const y2 = m01 * lx2 + m05 * ly2 + m09 * lz2 + m13;
+
+      const tMinY = Math.min(y0, y1, y2);
+      const tMaxY = Math.max(y0, y1, y2);
+      if (tMaxY - tMinY < 0.04) continue;
+
+      for (let p = 0; p < yPlanes.length; p++) {
+        const yp = yPlanes[p];
+        if (yp < tMinY || yp > tMaxY) continue;
+
+        const x0 = m00 * lx0 + m04 * ly0 + m08 * lz0 + m12;
+        const z0 = m02 * lx0 + m06 * ly0 + m10 * lz0 + m14;
+        const x1 = m00 * lx1 + m04 * ly1 + m08 * lz1 + m12;
+        const z1 = m02 * lx1 + m06 * ly1 + m10 * lz1 + m14;
+        const x2 = m00 * lx2 + m04 * ly2 + m08 * lz2 + m12;
+        const z2 = m02 * lx2 + m06 * ly2 + m10 * lz2 + m14;
+
+        let ax = 0, az = 0, bx = 0, bz = 0, count = 0;
+        const edge = (ya, yb, xa, za, xb, zb) => {
+          if ((ya <= yp && yb >= yp) || (yb <= yp && ya >= yp)) {
+            const dy = yb - ya;
+            if (Math.abs(dy) > 1e-6) {
+              const s = (yp - ya) / dy;
+              const px = xa + s * (xb - xa);
+              const pz = za + s * (zb - za);
+              if (count === 0) { ax = px; az = pz; count = 1; }
+              else if (count === 1) { bx = px; bz = pz; count = 2; }
+            }
+          }
+        };
+        edge(y0, y1, x0, z0, x1, z1);
+        edge(y1, y2, x1, z1, x2, z2);
+        if (count < 2) edge(y2, y0, x2, z2, x0, z0);
+
+        if (count === 2) {
+          const vx = bx - ax, vz = bz - az;
+          const lenSq = vx * vx + vz * vz;
+          if (lenSq > 0.0004) {
+            this._addColliderSegment(ax, az, bx, bz, vx, vz, lenSq, doorMesh);
+          }
+        }
+      }
+    }
+  }
+
+  _addColliderSegment(ax, az, bx, bz, vx, vz, lenSq, doorMesh) {
+    const seg = { ax, az, bx, bz, vx, vz, lenSq, doorMesh };
+    this.colliderSegmentsCount++;
+    const cs = this.colliderCellSize;
+    const gx0 = Math.floor(Math.min(ax, bx) / cs);
+    const gx1 = Math.floor(Math.max(ax, bx) / cs);
+    const gz0 = Math.floor(Math.min(az, bz) / cs);
+    const gz1 = Math.floor(Math.max(az, bz) / cs);
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz <= gz1; gz++) {
+        const key = `${gx},${gz}`;
+        let list = this.colliderGrid.get(key);
+        if (!list) {
+          list = [];
+          this.colliderGrid.set(key, list);
+        }
+        list.push(seg);
+      }
+    }
+  }
+
+  _getNearbySegments(x, z, pad = 0.6) {
+    const cs = this.colliderCellSize;
+    const gx0 = Math.floor((x - pad) / cs);
+    const gx1 = Math.floor((x + pad) / cs);
+    const gz0 = Math.floor((z - pad) / cs);
+    const gz1 = Math.floor((z + pad) / cs);
+    const out = [];
+    const seen = new Set();
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz <= gz1; gz++) {
+        const list = this.colliderGrid.get(`${gx},${gz}`);
+        if (!list) continue;
+        for (let i = 0; i < list.length; i++) {
+          const s = list[i];
+          if (seen.has(s)) continue;
+          if (s.doorMesh && s.doorMesh.userData?._doorRig?.open) continue;
+          seen.add(s);
+          out.push(s);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Indica si un punto (x, z) choca contra algún muro, mueble o puerta cerrada de 3ds Max dentro del radio dado. */
+  isPointBlocked(x, z, radius = 0.28) {
+    if (!this.loaded || !this.colliderSegmentsCount) return false;
+    const rSq = radius * radius;
+    const segs = this._getNearbySegments(x, z, radius + 0.15);
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      const t = Math.max(0, Math.min(1, ((x - s.ax) * s.vx + (z - s.az) * s.vz) / s.lenSq));
+      const dx = x - (s.ax + t * s.vx);
+      const dz = z - (s.az + t * s.vz);
+      if (dx * dx + dz * dz < rSq) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Resuelve el movimiento de (fromX, fromZ) a (toX, toZ) con deslizamiento suave sobre muros (incluso a 45°)
+   * y prevención estricta de efecto túnel (nunca atraviesa una pared ni una puerta cerrada).
+   */
+  resolveCollision(fromX, fromZ, toX, toZ, radius = 0.28) {
+    if (!this.loaded || !this.colliderSegmentsCount) return [toX, toZ];
+
+    const totalDx = toX - fromX;
+    const totalDz = toZ - fromZ;
+    const totalDist = Math.hypot(totalDx, totalDz);
+    const steps = Math.max(1, Math.ceil(totalDist / 0.05));
+    let curX = fromX;
+    let curZ = fromZ;
+
+    const segCross = (p0x, p0z, p1x, p1z, ax, az, bx, bz) => {
+      const rX = p1x - p0x, rZ = p1z - p0z;
+      const sX = bx - ax, sZ = bz - az;
+      const denom = rX * sZ - rZ * sX;
+      if (Math.abs(denom) < 1e-9) return false;
+      const qpX = ax - p0x, qpZ = az - p0z;
+      const t = (qpX * sZ - qpZ * sX) / denom;
+      const u = (qpX * rZ - qpZ * rX) / denom;
+      return t >= -0.02 && t <= 1.02 && u >= -0.02 && u <= 1.02;
+    };
+
+    for (let st = 1; st <= steps; st++) {
+      let nx = curX + (totalDx / steps);
+      let nz = curZ + (totalDz / steps);
+      const segs = this._getNearbySegments(nx, nz, radius + 0.35);
+
+      // 1. Empuje iterativo perpendicular al contorno 3D real (permite deslizar sobre muros ortogonales y a 45°)
+      for (let iter = 0; iter < 3; iter++) {
+        for (let i = 0; i < segs.length; i++) {
+          const s = segs[i];
+          const t = Math.max(0, Math.min(1, ((nx - s.ax) * s.vx + (nz - s.az) * s.vz) / s.lenSq));
+          const qx = s.ax + t * s.vx;
+          const qz = s.az + t * s.vz;
+          const dx = nx - qx;
+          const dz = nz - qz;
+          const dSq = dx * dx + dz * dz;
+          if (dSq < radius * radius) {
+            const d = Math.sqrt(dSq);
+            if (d > 1e-5) {
+              const push = radius - d;
+              nx += (dx / d) * push;
+              nz += (dz / d) * push;
+            } else {
+              nx = curX;
+              nz = curZ;
+            }
+          }
+        }
+      }
+
+      // 2. Verificación anti-túnel: el segmento (curX, curZ) -> (nx, nz) jamás puede cruzar un segmento de muro
+      let crossed = false;
+      for (let i = 0; i < segs.length; i++) {
+        const s = segs[i];
+        if (segCross(curX, curZ, nx, nz, s.ax, s.az, s.bx, s.bz)) {
+          crossed = true;
+          break;
+        }
+      }
+      if (crossed || this.isPointBlocked(nx, nz, radius * 0.88)) {
+        break;
+      }
+      curX = nx;
+      curZ = nz;
+    }
+
+    return [curX, curZ];
+  }
+
+  /** Encuentra el punto libre más cercano dentro de la habitación si un punto de vista cae cerca de un muro o mueble. */
+  findSafePosition(x, z, fallbackCenter = null, radius = 0.32) {
+    if (!this.isPointBlocked(x, z, radius)) return [x, z];
+    const [rx, rz] = this.resolveCollision(x, z, x, z, radius);
+    if (!this.isPointBlocked(rx, rz, radius * 0.9)) return [rx, rz];
+
+    for (let r = 0.12; r <= 1.25; r += 0.12) {
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        const tx = x + Math.cos(a) * r;
+        const tz = z + Math.sin(a) * r;
+        if (!this.isPointBlocked(tx, tz, radius)) return [tx, tz];
+      }
+    }
+    if (fallbackCenter && !this.isPointBlocked(fallbackCenter.x, fallbackCenter.z, radius * 0.85)) {
+      return [fallbackCenter.x, fallbackCenter.z];
+    }
+    return [x, z];
   }
 
   /** Raycast contra las mallas individuales incluso cuando han sido agrupadas por StaticBatcher (`visible = false`). */

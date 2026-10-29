@@ -425,14 +425,17 @@ export class FloorTour {
     if (fromRoom) {
       await this._fadeTo(() => { this._placeAt(v); });
     } else {
-      // vuelo: se coloca sobre la habitación y desciende hasta la altura de los ojos
-      const above = new THREE.Vector3(r.center.x, P2 + 11, r.center.z).add(new THREE.Vector3(v.pos.x - r.center.x, 0, v.pos.z - r.center.z).multiplyScalar(0.6));
+      // vuelo: se coloca exactamente en la vertical del punto seguro de la habitación y desciende sin cruzar muros
+      const [sx, sz] = this.app.maxPiso2?.loaded
+        ? this.app.maxPiso2.findSafePosition(v.pos.x, v.pos.z, r.center, 0.30)
+        : [v.pos.x, v.pos.z];
+      const above = new THREE.Vector3(sx, P2 + 11, sz);
       const look = v.look.clone();
       const tl = gsap.timeline();
       tl.to(cam.position, { x: above.x, y: above.y, z: above.z + 0.01, duration: 1.0, ease: 'power2.inOut' }, 0)
-        .to(ctl.target, { x: r.center.x, y: P2, z: r.center.z, duration: 1.0, ease: 'power2.inOut' }, 0)
+        .to(ctl.target, { x: sx, y: P2, z: sz, duration: 1.0, ease: 'power2.inOut' }, 0)
         .add(() => this._showDressing(true, r), 1.0)
-        .to(cam.position, { x: v.pos.x, y: v.pos.y, z: v.pos.z, duration: 1.5, ease: 'power3.inOut' }, 1.0)
+        .to(cam.position, { x: sx, y: v.pos.y, z: sz, duration: 1.5, ease: 'power3.inOut' }, 1.0)
         .to(ctl.target, { x: look.x, y: look.y, z: look.z, duration: 1.5, ease: 'power3.inOut' }, 1.0)
         .to(cam, { fov: 62, duration: 1.5, ease: 'power2.inOut', onUpdate: () => cam.updateProjectionMatrix() }, 1.0);
       await tl.then();
@@ -447,9 +450,12 @@ export class FloorTour {
     this._showDressing(true, r);
     const cam = this.app.camera, ctl = this.app.controls;
     const dir = v.look.clone().sub(v.pos).normalize();
-    cam.position.copy(v.pos);
+    const [sx, sz] = this.app.maxPiso2?.loaded
+      ? this.app.maxPiso2.findSafePosition(v.pos.x, v.pos.z, r?.center, 0.30)
+      : [v.pos.x, v.pos.z];
+    cam.position.set(sx, v.pos.y, sz);
     if (cam.fov !== 62) { cam.fov = 62; cam.updateProjectionMatrix(); }
-    ctl.target.copy(v.pos).addScaledVector(dir, 0.05);
+    ctl.target.copy(cam.position).addScaledVector(dir, 0.05);
     ctl.minDistance = 0.05; ctl.maxDistance = 0.05;
     ctl.minPolarAngle = 0.55; ctl.maxPolarAngle = 2.35;
     ctl.enableZoom = false; ctl.enablePan = false;
@@ -473,7 +479,7 @@ export class FloorTour {
     this.enterRoom(next.id, 0);
   }
 
-  /** Fundido a negro suave con un pequeño avance de cámara al reaparecer. */
+  /** Fundido a negro suave con un pequeño avance de cámara al reaparecer (respetando colisión contra muros). */
   _fadeTo(fn) {
     const veil = this.dom.veil;
     this._busy = true;
@@ -485,9 +491,19 @@ export class FloorTour {
           const cam = this.app.camera, ctl = this.app.controls;
           const dir = ctl.target.clone().sub(cam.position).normalize();
           const end = cam.position.clone(), endT = ctl.target.clone();
-          cam.position.addScaledVector(dir, -0.45); ctl.target.addScaledVector(dir, -0.45);
-          gsap.to(cam.position, { x: end.x, y: end.y, z: end.z, duration: 0.9, ease: 'power2.out' });
-          gsap.to(ctl.target, { x: endT.x, y: endT.y, z: endT.z, duration: 0.9, ease: 'power2.out' });
+          let backX = end.x - dir.x * 0.32;
+          let backZ = end.z - dir.z * 0.32;
+          if (this.app.maxPiso2?.loaded) {
+            [backX, backZ] = this.app.maxPiso2.resolveCollision(end.x, end.z, backX, backZ, 0.30);
+          } else if (this._blocked(backX, backZ)) {
+            backX = end.x;
+            backZ = end.z;
+          }
+          const dx = backX - end.x, dz = backZ - end.z;
+          cam.position.x += dx; cam.position.z += dz;
+          ctl.target.x += dx; ctl.target.z += dz;
+          gsap.to(cam.position, { x: end.x, y: end.y, z: end.z, duration: 0.85, ease: 'power2.out' });
+          gsap.to(ctl.target, { x: endT.x, y: endT.y, z: endT.z, duration: 0.85, ease: 'power2.out' });
           gsap.to(veil, { opacity: 0, duration: 0.55, ease: 'power1.out', onComplete: () => { this._busy = false; res(); } });
         }
       });
@@ -764,7 +780,12 @@ export class FloorTour {
   }
 
   _blocked(x, z) {
-    if (this.slabPoly && !pointInPoly(x, z, this.slabPoly)) return true;
+    const inSlab = !this.slabPoly || pointInPoly(x, z, this.slabPoly);
+    const inAnyRoom = this.rooms.some((r) => pointInPoly(x, z, r.poly));
+    if (!inSlab && !inAnyRoom) return true;
+    if (this.app.maxPiso2?.loaded && this.app.maxPiso2.colliderSegmentsCount > 0) {
+      return this.app.maxPiso2.isPointBlocked(x, z, 0.28);
+    }
     if (this.doors?.passable(x, z)) return false;   // vano de una puerta abierta
     if (this.doors?.blocks(x, z)) return true;      // hoja cerrada
     for (const s of this.wallSegs) {
@@ -795,16 +816,24 @@ export class FloorTour {
     const rgt = new THREE.Vector2(-f.y, f.x);
     const mv = f.multiplyScalar(fwd).add(rgt.multiplyScalar(side));
     if (mv.lengthSq() < 1e-8) return;
-    mv.normalize().multiplyScalar((k.has('shift') ? 2.8 : 1.35) * dt);
+    mv.normalize().multiplyScalar((k.has('shift') ? 2.6 : 1.35) * dt);
     const x = cam.position.x, z = cam.position.z;
     let nx = x + mv.x, nz = z + mv.y;
-    if (this._blocked(nx, nz)) {
+
+    if (this.app.maxPiso2?.loaded && this.app.maxPiso2.colliderSegmentsCount > 0) {
+      [nx, nz] = this.app.maxPiso2.resolveCollision(x, z, nx, nz, 0.28);
+      const inSlab = !this.slabPoly || pointInPoly(nx, nz, this.slabPoly);
+      const inAnyRoom = this.rooms.some((r) => pointInPoly(nx, nz, r.poly));
+      if (!inSlab && !inAnyRoom) return;
+    } else if (this._blocked(nx, nz)) {
       // deslizar a lo largo del muro
       if (!this._blocked(x + mv.x, z)) nz = z;
       else if (!this._blocked(x, z + mv.y)) nx = x;
       else return;
     }
+
     const dx = nx - x, dz = nz - z;
+    if (dx * dx + dz * dz < 1e-10) return;
     cam.position.x += dx; cam.position.z += dz;
     ctl.target.x += dx; ctl.target.z += dz;
     if (this.vpIndex !== -1) { this.vpIndex = -1; this._updateRoomUI(); }
@@ -825,6 +854,16 @@ export class FloorTour {
     const furn = this.app.interiorBuilder?.categoryGroups?.furniture;
     if (furn) { const show = this.mode !== 'off' || this.app._mode === 'top'; if (furn.visible !== show) furn.visible = show; }
     this._walk(dt);
+    // mantener siempre la cámara fuera de cualquier muro incluso al girar con OrbitControls
+    if (this.mode === 'room' && !this._busy && this.app.maxPiso2?.loaded && this.app.maxPiso2.colliderSegmentsCount > 0) {
+      const cam = this.app.camera, ctl = this.app.controls;
+      const [sx, sz] = this.app.maxPiso2.resolveCollision(cam.position.x, cam.position.z, cam.position.x, cam.position.z, 0.27);
+      const fixX = sx - cam.position.x, fixZ = sz - cam.position.z;
+      if (fixX * fixX + fixZ * fixZ > 1e-8) {
+        cam.position.x += fixX; cam.position.z += fixZ;
+        ctl.target.x += fixX; ctl.target.z += fixZ;
+      }
+    }
     // el cielo raso solo aparece al cruzarlo (así el descenso no "choca" contra una losa blanca)
     const belowCeil = this.app.camera.position.y < P2 + CEIL - 0.03;
     if (this.ceiling && this.group.visible && this.ceiling.visible !== belowCeil) { this.ceiling.visible = belowCeil; if (this.app.renderer) this.app.renderer.shadowMap.needsUpdate = true; }
