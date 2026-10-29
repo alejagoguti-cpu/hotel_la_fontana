@@ -135,11 +135,12 @@ export class MasterplanScene {
 
     // 2. Interior Piso 2 — Modelo 1:1 Real exportado de Autodesk 3ds Max (hotel_la_fontana_piso_2.glb)
     // Se conserva únicamente la losa base estructural del Piso 2 y se carga el GLB completo del segundo piso
-    const slabOnly = this.interiorBuilder.build({ slabLoops: arch.slabLoops, corridorCarpetLoop: arch.corridorCarpetLoop, corridorMarbleBorderLoops: arch.corridorMarbleBorderLoops, walls: [], columns: [], stairs: [] }, { wallFinishes: [] }, { items: [] }, []);
+    const slabOnly = this.interiorBuilder.build({ slabLoops: arch.slabLoops, corridorCarpetLoop: arch.corridorCarpetLoop, corridorMarbleBorderLoops: arch.corridorMarbleBorderLoops, walls: [], columns: [], stairs: [] }, { wallFinishes: [] }, { items: [] }, rooms);
     this.scene.add(slabOnly);
     this.scene.add(this.maxPiso2.group);
-    this.maxPiso2.load().then(() => {
+    this.maxPiso2Ready = this.maxPiso2.load().then(() => {
       this.interiorBuilder.bimElements.push(...this.maxPiso2.interactiveMeshes);
+      this.batchSoon();
       this.shadowsDirty = true;
       console.info('[3ds Max Piso 2] Modelo GLB cargado y alineado con éxito:', this.maxPiso2.interactiveMeshes.length, 'objetos interactivos');
     }).catch((e) => console.error('Error cargando GLB Piso 2:', e));
@@ -156,7 +157,7 @@ export class MasterplanScene {
   /** Fusiona las mallas quietas (ver StaticBatcher): de ~14.000 llamadas de dibujo a unos cientos. */
   batchSoon() {
     clearTimeout(this._batchT);
-    const roots = () => [...this.buildingBuilder.rootGroup.children.filter((c) => !c.userData.isBatch), this.interiorBuilder.group];
+    const roots = () => [...this.buildingBuilder.rootGroup.children.filter((c) => !c.userData.isBatch), this.interiorBuilder.group, this.maxPiso2.group];
     const snap = snapshotMatrices(roots());
     this._batchT = setTimeout(() => {
       const moving = movingSince(snap);
@@ -257,7 +258,7 @@ export class MasterplanScene {
       const isBimMode = store.state.bimInspectorOpen;
 
       if (isBimMode) {
-        const hits = this.raycaster.intersectObjects(this.interiorBuilder.bimElements, true);
+        const hits = [...this.raycaster.intersectObjects(this.interiorBuilder.bimElements, true), ...(this.maxPiso2?.loaded ? this.maxPiso2.raycast(this.raycaster) : [])].sort((a, b) => a.distance - b.distance);
         if (hits.length > 0) {
           let obj = hits[0].object;
           while (obj && !obj.userData?.bim && obj.parent) obj = obj.parent;
@@ -271,7 +272,7 @@ export class MasterplanScene {
 
       // En Recorrido de Habitación: clic sobre cualquier mueble o acabado del GLB abre el Personalizador PBR
       if (this.tour?.mode === 'room' && this.maxPiso2?.loaded) {
-        const meshHits = this.raycaster.intersectObjects(this.maxPiso2.interactiveMeshes, false);
+        const meshHits = this.maxPiso2.raycast(this.raycaster);
         if (meshHits.length > 0) {
           this.maxPiso2.selectObject(meshHits[0].object);
         }
@@ -291,7 +292,7 @@ export class MasterplanScene {
 
       // En Corte Piso 2 o Planta 3D: permitir seleccionar mobiliario o superficies directamente con clic
       if ((this._mode === 'interior' || this._mode === 'top') && this.maxPiso2?.loaded) {
-        const meshHits = this.raycaster.intersectObjects(this.maxPiso2.interactiveMeshes, false);
+        const meshHits = this.maxPiso2.raycast(this.raycaster);
         if (meshHits.length > 0) {
           this.maxPiso2.selectObject(meshHits[0].object);
         }

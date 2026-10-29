@@ -96,7 +96,7 @@ export function batchStatic(root, { exclude = new Set(), minCount = 2 } = {}) {
       mesh.userData.isBatch = true;
       mesh.matrixAutoUpdate = false;
       root.add(mesh);
-      b.items.forEach((o) => { o.visible = false; o.userData.batchedInto = mesh; });
+      b.items.forEach((o) => { o.visible = false; o.userData.batchedInto = mesh; o.userData.batchSiblings = b.items; });
       merged++; meshes += b.items.length;
     } catch (e) {
       geos.forEach((g) => g.dispose());

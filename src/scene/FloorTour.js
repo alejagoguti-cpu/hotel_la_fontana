@@ -230,7 +230,7 @@ export class FloorTour {
       this.ceiling.receiveShadow = false;
       this.group.add(this.ceiling);
     }
-    this._buildCornices();
+    // this._buildCornices();
     // Las puertas y baños equipados ya vienen 1:1 en el GLB exportado de 3ds Max
     // vanos: luz de día difusa con cortina translúcida (lo que se ve desde dentro)
     const winTex = this._windowTexture();
@@ -825,7 +825,9 @@ export class FloorTour {
     if (furn) { const show = this.mode !== 'off' || this.app._mode === 'top'; if (furn.visible !== show) furn.visible = show; }
     this._walk(dt);
     // el cielo raso solo aparece al cruzarlo (así el descenso no "choca" contra una losa blanca)
-    if (this.ceiling && this.group.visible) this.ceiling.visible = this.app.camera.position.y < P2 + CEIL - 0.03;
+    const belowCeil = this.app.camera.position.y < P2 + CEIL - 0.03;
+    if (this.ceiling && this.group.visible) this.ceiling.visible = belowCeil;
+    this.app.maxPiso2?.setCeilingVisible(belowCeil);
     if (this.cornices && this.ceiling) this.cornices.visible = this.ceiling.visible;
     if (this.badgesOn && this.badgeEls) {
       const rect = this.app.container.getBoundingClientRect();

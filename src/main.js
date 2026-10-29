@@ -42,8 +42,8 @@ class App {
     this.scene.loadData().then(async () => {
       this.windowEditor = new WindowEditor(this.scene);
       this.loading.set(0.7, 'Cargando el contexto urbano de Bogotá…');
-      const city = this.scene.city?.ready || Promise.resolve();
-      await Promise.race([city, new Promise((r) => setTimeout(r, 9000))]);
+      const city = Promise.all([this.scene.city?.ready || Promise.resolve(), this.scene.maxPiso2Ready || Promise.resolve()]);
+      await Promise.race([city, new Promise((r) => setTimeout(r, 11000))]);
       this.loading.set(0.92, 'Optimizando la escena…');
       await new Promise((r) => setTimeout(r, 1500));
       this.loading.done();

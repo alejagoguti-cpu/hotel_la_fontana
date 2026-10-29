@@ -20,6 +20,7 @@ export class MaxPiso2Loader {
 
     this.loaded = false;
     this.interactiveMeshes = [];
+    this.ceilingMeshes = [];
     this.materialsByName = new Map();
     this.selectedMesh = null;
     this.highlightBox = null;
@@ -92,10 +93,33 @@ export class MaxPiso2Loader {
         (gltf) => {
           const root = gltf.scene;
           const aniso = this.app.renderer.capabilities.getMaxAnisotropy?.() || 8;
+          const seenGeo = new Set();
 
           root.traverse((obj) => {
             if (!obj.isMesh) return;
-            obj.castShadow = true;
+            if (obj.geometry && !seenGeo.has(obj.geometry)) {
+              seenGeo.add(obj.geometry);
+              for (const [k, a] of Object.entries(obj.geometry.attributes)) {
+                if (a.isInterleavedBufferAttribute) {
+                  const n = a.count, s = a.itemSize, out = new a.array.constructor(n * s);
+                  const src = a.data.array, stride = a.data.stride, off = a.offset;
+                  for (let i = 0; i < n; i++) {
+                    const base = i * stride + off, dst = i * s;
+                    for (let j = 0; j < s; j++) out[dst + j] = src[base + j];
+                  }
+                  obj.geometry.setAttribute(k, new THREE.BufferAttribute(out, s, a.normalized));
+                }
+              }
+            }
+            const nm = obj.name || obj.parent?.name || 'Elemento_P2';
+            const isCeil = /Cielo_Pasillo|Faldon_Cielo/i.test(nm);
+            if (isCeil) {
+              obj.userData.isCeiling = true;
+              obj.userData.dynamic = true;
+              this.ceilingMeshes.push(obj);
+            }
+            // Solo muros, columnas y pórticos proyectan sombra solar directa (evita sobrecargar el shadow map de 4096px)
+            obj.castShadow = !isCeil && /MURO|COLUMNA|PORTAL|PUERTA|MARCO|DINTEL/i.test(nm);
             obj.receiveShadow = true;
 
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
@@ -112,7 +136,6 @@ export class MaxPiso2Loader {
             });
 
             // Registrar metadatos BIM para que el inspector y el selector PBR funcionen sobre cada objeto
-            const nm = obj.name || obj.parent?.name || 'Elemento_P2';
             const matLabel = mats[0]?.name || 'PBR Standard';
             obj.userData.bim = {
               elementId: obj.id,
@@ -154,6 +177,36 @@ export class MaxPiso2Loader {
       .replace(/_i\d+$/, '')
       .replace(/mesh_name_undefined_/g, 'Pieza_')
       .replace(/_/g, ' ');
+  }
+
+  setCeilingVisible(vis) {
+    if (this._ceilVis === vis) return;
+    this._ceilVis = vis;
+    for (const m of this.ceilingMeshes) m.visible = vis;
+  }
+
+  /** Raycast contra las mallas individuales incluso cuando han sido agrupadas por StaticBatcher (`visible = false`). */
+  raycast(raycaster) {
+    const hits = [];
+    for (const m of this.interactiveMeshes) {
+      if (m.userData?.isCeiling && !m.visible) continue;
+      m.raycast(raycaster, hits);
+    }
+    hits.sort((a, b) => a.distance - b.distance);
+    return hits;
+  }
+
+  _unbatchMesh(mesh) {
+    const batchMesh = mesh?.userData?.batchedInto;
+    if (!batchMesh) return;
+    const siblings = mesh.userData.batchSiblings || [mesh];
+    batchMesh.parent?.remove(batchMesh);
+    batchMesh.geometry?.dispose();
+    for (const s of siblings) {
+      s.visible = true;
+      s.userData.batchedInto = null;
+      s.userData.batchSiblings = null;
+    }
   }
 
   /** Selecciona un objeto 3D del Piso 2 para personalizar su material PBR en tiempo real. */
@@ -198,6 +251,7 @@ export class MaxPiso2Loader {
     const targetMat = this.materialsByName.get(matName);
     if (!targetMat) return;
 
+    this._unbatchMesh(this.selectedMesh);
     if (!this.selectedMesh.userData._origMaterial) {
       this.selectedMesh.userData._origMaterial = this.selectedMesh.material;
     }
@@ -214,6 +268,7 @@ export class MaxPiso2Loader {
 
   restoreOriginalMaterial() {
     if (!this.selectedMesh || !this.selectedMesh.userData._origMaterial) return;
+    this._unbatchMesh(this.selectedMesh);
     this.selectedMesh.material = this.selectedMesh.userData._origMaterial;
     const curMat = Array.isArray(this.selectedMesh.material) ? this.selectedMesh.material[0] : this.selectedMesh.material;
     this.domSub.textContent = `Material actual: ${(curMat?.name || 'Original').replace(/_/g, ' ')}`;

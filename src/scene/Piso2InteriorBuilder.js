@@ -52,7 +52,7 @@ export class Piso2InteriorBuilder {
       const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.22, bevelEnabled: false });
       geo.rotateX(-Math.PI / 2);
       const slabMesh = new THREE.Mesh(geo, this.materials.get('WALL_PAINT'));
-      slabMesh.position.y = PISO2_Y - 0.22;
+      slabMesh.position.y = PISO2_Y - 0.24;
       slabMesh.receiveShadow = true;
       this.categoryGroups.floors.add(slabMesh);
       this.registerBimMesh(slabMesh, {
@@ -72,7 +72,7 @@ export class Piso2InteriorBuilder {
       const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.015, bevelEnabled: false });
       geo.rotateX(-Math.PI / 2);
       const mesh = new THREE.Mesh(geo, this.materials.get('HALL_ALFOMBRA'));
-      mesh.position.y = PISO2_Y + 0.005;
+      mesh.position.y = PISO2_Y - 0.014;
       mesh.receiveShadow = true;
       this.categoryGroups.floors.add(mesh);
       this.registerBimMesh(mesh, {
@@ -99,7 +99,7 @@ export class Piso2InteriorBuilder {
       const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.02, bevelEnabled: false });
       geo.rotateX(-Math.PI / 2);
       const mesh = new THREE.Mesh(geo, this.materials.get('HALL_MARMOL'));
-      mesh.position.y = PISO2_Y + 0.002;
+      mesh.position.y = PISO2_Y - 0.018;
       mesh.receiveShadow = true;
       this.categoryGroups.floors.add(mesh);
       this.registerBimMesh(mesh, {
@@ -120,7 +120,7 @@ export class Piso2InteriorBuilder {
       const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.012, bevelEnabled: false });
       geo.rotateX(-Math.PI / 2);
       const mesh = new THREE.Mesh(geo, this.materials.get('REF01'));
-      mesh.position.y = PISO2_Y + 0.008;
+      mesh.position.y = PISO2_Y - 0.014;
       mesh.receiveShadow = true;
       this.categoryGroups.floors.add(mesh);
       this.registerBimMesh(mesh, {
@@ -141,7 +141,7 @@ export class Piso2InteriorBuilder {
         const bGeo = new THREE.ExtrudeGeometry(bShape, { depth: 0.014, bevelEnabled: false });
         bGeo.rotateX(-Math.PI / 2);
         const bMesh = new THREE.Mesh(bGeo, this.materials.get('REF02'));
-        bMesh.position.y = PISO2_Y + 0.01;
+        bMesh.position.y = PISO2_Y - 0.014;
         bMesh.receiveShadow = true;
         this.categoryGroups.floors.add(bMesh);
         this.registerBimMesh(bMesh, {
@@ -163,7 +163,7 @@ export class Piso2InteriorBuilder {
         const eGeo = new THREE.ExtrudeGeometry(eShape, { depth: 0.012, bevelEnabled: false });
         eGeo.rotateX(-Math.PI / 2);
         const eMesh = new THREE.Mesh(eGeo, this.materials.get('REF01'));
-        eMesh.position.y = PISO2_Y + 0.008;
+        eMesh.position.y = PISO2_Y - 0.014;
         eMesh.receiveShadow = true;
         this.categoryGroups.floors.add(eMesh);
       });
