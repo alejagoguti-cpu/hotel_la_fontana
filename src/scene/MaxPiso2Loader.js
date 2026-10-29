@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
 
 const _tl = new THREE.TextureLoader();
 const _texCache = new Map();
@@ -114,6 +115,11 @@ export class MaxPiso2Loader {
     this.interactiveMeshes = [];
     this.ceilingMeshes = [];
     this.emitterBoxes = [];
+    this.mirrorSpecs = [];
+    this.mirrorsGroup = new THREE.Group();
+    this.mirrorsGroup.name = 'Espejos_Piso2_3dsMax';
+    this.mirrorsGroup.visible = false;
+    this._renderingMirror = false;
     this.materialsByName = new Map();
     this.selectedMesh = null;
     this.highlightBox = null;
@@ -179,12 +185,55 @@ export class MaxPiso2Loader {
    * de la habitación activa (0 luces adicionales en la escena -> compilación de shaders instantánea).
    */
   focusRoom(on, r) {
+    if (this.mirrorsGroup) {
+      if (!this.mirrorsGroup.parent && this.app?.scene) {
+        this.app.scene.add(this.mirrorsGroup);
+      }
+      this.mirrorsGroup.visible = Boolean(on && r);
+    }
+
     const tour = this.app.tour;
     const look = tour?.look;
     if (!on || !r || !tour) return;
 
     const P2 = 3.02;
     const poly = r.poly || [];
+    const cx = r.bounds ? (r.bounds.minX + r.bounds.maxX) * 0.5 : r.pole.x;
+    const cz = r.bounds ? (r.bounds.minZ + r.bounds.maxZ) * 0.5 : r.pole.z;
+
+    // Activar únicamente los espejos (Reflector en tiempo real) que pertenecen a la habitación activa
+    // y orientar su normal hacia el punto de vista más cercano dentro de la habitación
+    const vps = r.vps?.length ? r.vps : [{ pos: new THREE.Vector3(cx, P2 + 1.6, cz) }];
+    for (const ms of this.mirrorSpecs) {
+      const dist = Math.hypot(ms.center.x - cx, ms.center.z - cz);
+      const inRoom = (poly.length >= 3 && pointInPoly(ms.center.x, ms.center.z, poly)) || dist < 4.8;
+      if (!inRoom) {
+        ms.refl.visible = false;
+        continue;
+      }
+      const nearVp = vps.reduce((a, b) => (a.pos.distanceTo(ms.center) < b.pos.distanceTo(ms.center) ? a : b), vps[0]);
+      const toEyeX = nearVp.pos.x - ms.center.x;
+      const toEyeZ = nearVp.pos.z - ms.center.z;
+      const dot = toEyeX * ms.normal.x + toEyeZ * ms.normal.z;
+      // Si el espejo está en el otro lado de un muro divisorio (mirando a la habitación vecina), no activarlo
+      if (dot < -0.15 && dist > 1.8) {
+        ms.refl.visible = false;
+        continue;
+      }
+      const sign = dot >= 0 ? 1 : -1;
+      const nx = ms.normal.x * sign;
+      const nz = ms.normal.z * sign;
+      ms.refl.position.set(
+        ms.center.x + nx * (ms.thickness * 0.5 + 0.008),
+        ms.center.y,
+        ms.center.z + nz * (ms.thickness * 0.5 + 0.008)
+      );
+      ms.refl.rotation.set(0, Math.atan2(nx, nz), 0);
+      ms.refl.updateMatrixWorld(true);
+      ms.refl.visible = true;
+      ms.refl.userData.frame = 0;
+    }
+
     const roomEmitters = this.emitterBoxes.filter((eb) => {
       if (poly.length >= 3 && pointInPoly(eb.center.x, eb.center.z, poly)) return true;
       return Math.hypot(eb.center.x - r.pole.x, eb.center.z - r.pole.z) < 3.6;
@@ -195,8 +244,6 @@ export class MaxPiso2Loader {
       .sort((a, b) => b.long - a.long);
 
     // Centro geométrico de la habitación para que roomLight nunca quede pegada a un muro lateral
-    const cx = r.bounds ? (r.bounds.minX + r.bounds.maxX) * 0.5 : r.pole.x;
-    const cz = r.bounds ? (r.bounds.minZ + r.bounds.maxZ) * 0.5 : r.pole.z;
     const midX = (cx + r.pole.x) * 0.5;
     const midZ = (cz + r.pole.z) * 0.5;
 
@@ -439,6 +486,57 @@ export class MaxPiso2Loader {
               this.emitterBoxes.push({ center, size, long, name: rawName });
             }
 
+            // Espejos reales de habitaciones y baños (Reflector planar en tiempo real sobre láminas Aluminum_Polished)
+            if (mats.length === 1 && /^Aluminum_Polished/i.test(mats[0]?.name || '') && obj.geometry) {
+              obj.geometry.computeBoundingBox();
+              const bb = obj.geometry.boundingBox;
+              if (bb) {
+                const sx = (bb.max.x - bb.min.x) * 0.0254;
+                const sy = (bb.max.y - bb.min.y) * 0.0254;
+                const sz = (bb.max.z - bb.min.z) * 0.0254;
+                const thickness = Math.min(sx, sy);
+                const width = Math.max(sx, sy);
+                const height = sz;
+                if (thickness < 0.04 && width > 0.45 && height > 0.45) {
+                  const cLocal = bb.getCenter(new THREE.Vector3());
+                  const worldCenter = cLocal.clone().applyMatrix4(obj.matrixWorld);
+                  const nLocal = sx < sy ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(0, -1, 0);
+                  const worldNormal = nLocal.clone().transformDirection(obj.matrixWorld);
+                  worldNormal.y = 0;
+                  if (worldNormal.lengthSq() > 1e-6) {
+                    worldNormal.normalize();
+                    const res = 512;
+                    const refl = new Reflector(
+                      new THREE.PlaneGeometry(Math.max(0.2, width - 0.012), Math.max(0.2, height - 0.012)),
+                      {
+                        textureWidth: res,
+                        textureHeight: Math.max(256, Math.min(1024, Math.round((res * height) / width))),
+                        color: 0xd4d8dc,
+                        clipBias: 0.003
+                      }
+                    );
+                    refl.position.copy(worldCenter).addScaledVector(worldNormal, thickness * 0.5 + 0.004);
+                    refl.rotation.set(0, Math.atan2(worldNormal.x, worldNormal.z), 0);
+                    refl.visible = false;
+                    refl.userData.frame = 0;
+                    const origBefore = refl.onBeforeRender;
+                    refl.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
+                      if (scene.overrideMaterial || this._renderingMirror) return;
+                      if ((refl.userData.frame++ & 1) !== 0) return;
+                      this._renderingMirror = true;
+                      try {
+                        origBefore.call(refl, renderer, scene, camera, geometry, material, group);
+                      } finally {
+                        this._renderingMirror = false;
+                      }
+                    };
+                    this.mirrorsGroup.add(refl);
+                    this.mirrorSpecs.push({ mesh: obj, refl, center: worldCenter, normal: worldNormal, width, height, thickness });
+                  }
+                }
+              }
+            }
+
             // Muros y mobiliario proyectan sombras suaves (al fusionarse con StaticBatcher no añade draw calls)
             obj.castShadow = !isCeil && !isEmitter && !mats[0]?.transparent;
             obj.receiveShadow = !isEmitter;
@@ -458,7 +556,14 @@ export class MaxPiso2Loader {
             this.interactiveMeshes.push(obj);
           });
 
+          if (this.app?.scene && !this.mirrorsGroup.parent) {
+            this.app.scene.add(this.mirrorsGroup);
+          }
           this.loaded = true;
+          if (this.app?.tour?.mode === 'room' && this.app.tour.current) {
+            this.focusRoom(true, this.app.tour.current);
+          }
+          console.info(`[3ds Max Piso 2] Espejos Reflector creados: ${this.mirrorSpecs.length}`);
           resolve(this.group);
         },
         (xhr) => {

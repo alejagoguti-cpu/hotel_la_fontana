@@ -421,7 +421,7 @@ export class RevitRoomFurniture {
         r.position.copy(c);
         if (thinX) { r.position.x += sign * (s.x / 2 + 0.002); r.rotation.y = sign * Math.PI / 2; }
         else { r.position.z += sign * (s.z / 2 + 0.002); r.rotation.y = sign > 0 ? 0 : Math.PI; }
-        { let f = 0; const ob = r.onBeforeRender; r.onBeforeRender = function (...args) { if ((f++ & 1) === 0) ob.apply(this, args); }; }   // refleja 1 de cada 2 cuadros
+        { let f = 0; const ob = r.onBeforeRender; r.onBeforeRender = function (...args) { if (!args[1]?.overrideMaterial && (f++ & 1) === 0) ob.apply(this, args); }; }   // refleja 1 de cada 2 cuadros
         this.mirrors.add(r);
       }));
     });
