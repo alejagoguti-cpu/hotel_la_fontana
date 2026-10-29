@@ -223,13 +223,20 @@ export class MaxPiso2Loader {
       const sign = dot >= 0 ? 1 : -1;
       const nx = ms.normal.x * sign;
       const nz = ms.normal.z * sign;
+      // Offset de 2.6 cm hacia el interior para quedar por delante del paño de muro (-3.13) y dentro del bisel negro (-3.115)
+      const frontOffset = Math.max(ms.thickness * 0.5 + 0.008, 0.026);
       ms.refl.position.set(
-        ms.center.x + nx * (ms.thickness * 0.5 + 0.008),
+        ms.center.x + nx * frontOffset,
         ms.center.y,
-        ms.center.z + nz * (ms.thickness * 0.5 + 0.008)
+        ms.center.z + nz * frontOffset
       );
       ms.refl.rotation.set(0, Math.atan2(nx, nz), 0);
       ms.refl.updateMatrixWorld(true);
+      ms.refl.userData.wallPos = ms.refl.position.clone();
+      ms.refl.userData.wallQuat = ms.refl.quaternion.clone();
+      ms.refl.userData.wallNormal = new THREE.Vector3(nx, 0, nz);
+      ms.refl.userData.roomCenter = new THREE.Vector3(cx, P2 + 1.15, cz);
+      ms.refl.userData.width = ms.width;
       ms.refl.visible = true;
       ms.refl.userData.frame = 0;
     }
@@ -524,9 +531,37 @@ export class MaxPiso2Loader {
                       if (scene.overrideMaterial || this._renderingMirror) return;
                       if ((refl.userData.frame++ & 1) !== 0) return;
                       this._renderingMirror = true;
+                      const wallPos = refl.userData.wallPos;
+                      const wallQuat = refl.userData.wallQuat;
+                      const wallNormal = refl.userData.wallNormal;
+                      const roomCenter = refl.userData.roomCenter;
+                      const mWidth = refl.userData.width || 0.84;
                       try {
+                        if (wallPos && wallQuat && wallNormal && roomCenter) {
+                          const toCam = new THREE.Vector3().subVectors(camera.position, wallPos).setY(0);
+                          const toRoom = new THREE.Vector3().subVectors(roomCenter, wallPos).setY(0);
+                          if (toCam.lengthSq() > 1e-4 && toRoom.lengthSq() > 1e-4) {
+                            toCam.normalize();
+                            toRoom.normalize();
+                            const bisector = new THREE.Vector3().addVectors(toCam, toRoom).normalize();
+                            const effN = new THREE.Vector3()
+                              .addScaledVector(wallNormal, 0.35)
+                              .addScaledVector(bisector, 0.65)
+                              .normalize();
+                            const sinTilt = Math.sqrt(Math.max(0, 1 - Math.pow(effN.dot(wallNormal), 2)));
+                            const extraAdvance = mWidth * 0.55 * sinTilt + 0.015;
+                            refl.position.copy(wallPos).addScaledVector(wallNormal, extraAdvance);
+                            refl.rotation.set(0, Math.atan2(effN.x, effN.z), 0);
+                            refl.updateMatrixWorld(true);
+                          }
+                        }
                         origBefore.call(refl, renderer, scene, camera, geometry, material, group);
                       } finally {
+                        if (wallPos && wallQuat) {
+                          refl.position.copy(wallPos);
+                          refl.quaternion.copy(wallQuat);
+                          refl.updateMatrixWorld(true);
+                        }
                         this._renderingMirror = false;
                       }
                     };
@@ -623,13 +658,466 @@ export class MaxPiso2Loader {
     }
   }
 
-  /** Selecciona un objeto 3D del Piso 2 para personalizar su material PBR en tiempo real. */
-  selectObject(mesh) {
+  /**
+   * Detecta si la malla clicada corresponde a una Puerta, Cortina o Lámpara/Interruptor
+   * para ejecutar su acción física interactiva (abrir/cerrar puerta, correr cortina, encender/apagar luz).
+   */
+  _classifyInteractive(mesh) {
+    if (!mesh) return null;
+    const nm = mesh.name || '';
+    const matName = (Array.isArray(mesh.material) ? mesh.material[0]?.name : mesh.material?.name) || '';
+    const tag = `${nm}|${matName}`;
+
+    // 1. Puertas y manijas/herrajes
+    const isDoorLeaf = /Hoja|Puerta|Door|Doble_Grupo#22$|Doble_mesh_name_undefined_123$|Sencilla_mesh_name_undefined_131$|Sencilla_Grupo#63$|Sencilla_Grupo#21$|Puertas_Referencia/i.test(tag);
+    const isDoorHandle = /Herraje|Sencilla_Grupo#68$|Sencilla_Grupo#69$|85ee755f/i.test(tag);
+    if (isDoorLeaf || isDoorHandle) {
+      let leaf = mesh;
+      if (isDoorHandle && !isDoorLeaf) {
+        const hc = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
+        let bestD = 1.3;
+        for (const m of this.interactiveMeshes) {
+          const mTag = `${m.name || ''}|${(Array.isArray(m.material) ? m.material[0]?.name : m.material?.name) || ''}`;
+          if (/Hoja|Puerta|Door|Doble_Grupo#22$|Doble_mesh_name_undefined_123$|Sencilla_mesh_name_undefined_131$|Sencilla_Grupo#63$|Sencilla_Grupo#21$|Puertas_Referencia/i.test(mTag)) {
+            const d = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3()).distanceTo(hc);
+            if (d < bestD) { bestD = d; leaf = m; }
+          }
+        }
+      }
+      return { type: 'door', target: leaf };
+    }
+
+    // 2. Cortinas y Blackouts Hunter Douglas (incluye paños de terciopelo skp399 y cortinas traslúcidas Grupo#1014)
+    if (/Cortina|Hunter|Blackout|Blind|Grupo#1014|skp399|Velvet_03_Blue|Componente#14$/i.test(tag)) {
+      let drape = mesh;
+      if (!/Grupo#1014|skp399|adskMatCortinas|Velvet_03_Blue/i.test(tag)) {
+        const cc = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
+        let bestD = 2.8;
+        for (const m of this.interactiveMeshes) {
+          const mTag = `${m.name || ''}|${(Array.isArray(m.material) ? m.material[0]?.name : m.material?.name) || ''}`;
+          if (/Grupo#1014|skp399|adskMatCortinas|Velvet_03_Blue/i.test(mTag)) {
+            const d = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3()).distanceTo(cc);
+            if (d < bestD) { bestD = d; drape = m; }
+          }
+        }
+      }
+      return { type: 'curtain', target: drape };
+    }
+
+    // 3. Lámparas, Apliques, Luminarias LED e Interruptores de pared
+    const isSwitch = /faceplate|duplex_receptacle|lutron|\blite\b/i.test(nm);
+    const isGoldLamp = /Gold_Blurry/i.test(matName) && !/Componente#2$/i.test(nm);
+    const isLampPart = isSwitch || isGoldLamp || /^Luz$|Difusor_LED/i.test(matName)
+      || /Lamp|Lumin|Aplique|Difusor|Luz|Componente#(3[2-9]|4[0-9]|5[0-4]|168|169|275|319|32[2367]|41[0-9]|42[0-2])|Grupo#47$|Grupo#101$|Group#(87|189|191|192)|undefined_(85[3-6]|90[2367]|1196|1205|1312|137[678]|1722|1888|1895|1961)/i.test(nm);
+    if (isLampPart) {
+      return { type: 'lamp', target: mesh, isSwitch };
+    }
+
+    return null;
+  }
+
+  /** Abre o cierra suavemente una puerta (batiente sobre bisagra o corrediza) junto con sus herrajes. */
+  toggleDoor(doorMesh) {
+    if (!doorMesh) return;
+    if (!doorMesh.userData._doorRig) {
+      doorMesh.updateWorldMatrix(true, false);
+      const doorBox = new THREE.Box3().setFromObject(doorMesh);
+      const doorCenter = doorBox.getCenter(new THREE.Vector3());
+
+      const parts = [doorMesh];
+      for (const m of this.interactiveMeshes) {
+        if (m === doorMesh) continue;
+        const mTag = `${m.name || ''}|${(Array.isArray(m.material) ? m.material[0]?.name : m.material?.name) || ''}`;
+        if (/Herraje|Sencilla_Grupo#68$|Sencilla_Grupo#69$|85ee755f/i.test(mTag)) {
+          const mc = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3());
+          if (mc.distanceTo(doorCenter) < 1.15) parts.push(m);
+        }
+      }
+
+      const partStates = parts.map((p) => {
+        this._unbatchMesh(p);
+        p.updateWorldMatrix(true, false);
+        p.matrixAutoUpdate = false;
+        return {
+          mesh: p,
+          origMatrix: p.matrix.clone(),
+          origWorld: p.matrixWorld.clone(),
+          parentInv: p.parent.matrixWorld.clone().invert()
+        };
+      });
+
+      doorMesh.geometry.computeBoundingBox();
+      const bb = doorMesh.geometry.boundingBox;
+      const sx = (bb.max.x - bb.min.x) * 0.0254;
+      const sy = (bb.max.y - bb.min.y) * 0.0254;
+      const xIsWidth = sx >= sy;
+      const width = Math.max(sx, sy);
+      const isSliding = /Grupo#63/i.test(doorMesh.name) || width > 1.55;
+
+      const cLocal = bb.getCenter(new THREE.Vector3());
+      const pMinLocal = cLocal.clone();
+      const pMaxLocal = cLocal.clone();
+      if (xIsWidth) { pMinLocal.x = bb.min.x; pMaxLocal.x = bb.max.x; }
+      else { pMinLocal.y = bb.min.y; pMaxLocal.y = bb.max.y; }
+
+      const pMinWorld = pMinLocal.applyMatrix4(doorMesh.matrixWorld);
+      const pMaxWorld = pMaxLocal.applyMatrix4(doorMesh.matrixWorld);
+
+      let hingeWorld = pMinWorld;
+      if (parts.length > 1) {
+        const hCenter = new THREE.Box3().setFromObject(parts[1]).getCenter(new THREE.Vector3());
+        hingeWorld = pMinWorld.distanceTo(hCenter) >= pMaxWorld.distanceTo(hCenter) ? pMinWorld : pMaxWorld;
+      } else {
+        const minCoord = xIsWidth ? bb.min.x : bb.min.y;
+        const maxCoord = xIsWidth ? bb.max.x : bb.max.y;
+        hingeWorld = Math.abs(minCoord) <= Math.abs(maxCoord) ? pMinWorld : pMaxWorld;
+      }
+
+      const wAxisLocal = xIsWidth ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+      const slideDir = wAxisLocal.transformDirection(doorMesh.matrixWorld);
+      slideDir.y = 0;
+      if (slideDir.lengthSq() > 1e-6) slideDir.normalize();
+
+      doorMesh.userData._doorRig = {
+        open: false,
+        progress: 0,
+        isSliding,
+        slideDir,
+        slideDist: width * 0.45,
+        hingeWorld,
+        doorCenter,
+        partStates,
+        tween: null
+      };
+    }
+
+    const rig = doorMesh.userData._doorRig;
+    rig.open = !rig.open;
+
+    // Elegir sentido de giro alejándose de la cámara al abrir
+    if (rig.open && !rig.isSliding && this.app?.camera) {
+      const camPos = this.app.camera.position;
+      const vx = rig.doorCenter.x - rig.hingeWorld.x;
+      const vz = rig.doorCenter.z - rig.hingeWorld.z;
+      const rotPos = new THREE.Vector3(rig.hingeWorld.x + vx * Math.cos(1.1) + vz * Math.sin(1.1), rig.doorCenter.y, rig.hingeWorld.z - vx * Math.sin(1.1) + vz * Math.cos(1.1));
+      const rotNeg = new THREE.Vector3(rig.hingeWorld.x + vx * Math.cos(-1.1) + vz * Math.sin(-1.1), rig.doorCenter.y, rig.hingeWorld.z - vx * Math.sin(-1.1) + vz * Math.cos(-1.1));
+      rig.swingSign = rotPos.distanceTo(camPos) >= rotNeg.distanceTo(camPos) ? 1 : -1;
+    } else if (!rig.swingSign) {
+      rig.swingSign = 1;
+    }
+
+    const applyProgress = (t) => {
+      rig.progress = t;
+      if (t <= 1e-4) {
+        for (const ps of rig.partStates) {
+          ps.mesh.matrix.copy(ps.origMatrix);
+          ps.mesh.matrixWorldNeedsUpdate = true;
+          ps.mesh.updateMatrixWorld(true);
+        }
+      } else {
+        const W = new THREE.Matrix4();
+        if (rig.isSliding) {
+          W.makeTranslation(rig.slideDir.x * rig.slideDist * t, 0, rig.slideDir.z * rig.slideDist * t);
+        } else {
+          const T1 = new THREE.Matrix4().makeTranslation(rig.hingeWorld.x, rig.hingeWorld.y, rig.hingeWorld.z);
+          const R = new THREE.Matrix4().makeRotationY(rig.swingSign * 1.42 * t);
+          const T2 = new THREE.Matrix4().makeTranslation(-rig.hingeWorld.x, -rig.hingeWorld.y, -rig.hingeWorld.z);
+          W.multiplyMatrices(T1, R).multiply(T2);
+        }
+        const tmpWorld = new THREE.Matrix4();
+        for (const ps of rig.partStates) {
+          tmpWorld.multiplyMatrices(W, ps.origWorld);
+          ps.mesh.matrix.multiplyMatrices(ps.parentInv, tmpWorld);
+          ps.mesh.matrixWorldNeedsUpdate = true;
+          ps.mesh.updateMatrixWorld(true);
+        }
+      }
+      if (this.highlightBox?.visible && this.selectedMesh) {
+        this.highlightBox.setFromObject(this.selectedMesh);
+      }
+      if (this.app?.renderer) this.app.renderer.shadowMap.needsUpdate = true;
+    };
+
+    rig.tween?.kill?.();
+    const targetT = rig.open ? 1 : 0;
+    if (window.gsap) {
+      rig.tween = window.gsap.to(rig, {
+        progress: targetT,
+        duration: 0.85,
+        ease: 'power2.inOut',
+        onUpdate: () => applyProgress(rig.progress)
+      });
+    } else {
+      applyProgress(targetT);
+    }
+
+    this._showToast(rig.open ? '🚪 Puerta abierta' : '🚪 Puerta cerrada');
+    this._updateActionUI();
+  }
+
+  /** Corre o cierra suavemente una cortina hacia los extremos de la ventana y modula la entrada de luz natural. */
+  toggleCurtain(drapeMesh) {
+    if (!drapeMesh) return;
+    let rig = drapeMesh.userData._curtainRig;
+    if (!rig) {
+      drapeMesh.updateWorldMatrix(true, false);
+      const cBox = new THREE.Box3().setFromObject(drapeMesh);
+      const cCenter = cBox.getCenter(new THREE.Vector3());
+
+      const parts = [drapeMesh];
+      for (const m of this.interactiveMeshes) {
+        if (m === drapeMesh) continue;
+        const mTag = `${m.name || ''}|${(Array.isArray(m.material) ? m.material[0]?.name : m.material?.name) || ''}`;
+        if (/Grupo#1014|skp399|adskMatCortinas|Velvet_03_Blue/i.test(mTag)) {
+          const mc = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3());
+          if (mc.distanceTo(cCenter) < 2.8) parts.push(m);
+        }
+      }
+
+      // Determinar eje horizontal de la ventana en espacio mundo
+      const totalBox = new THREE.Box3();
+      parts.forEach((p) => {
+        p.updateWorldMatrix(true, false);
+        totalBox.expandByObject(p);
+      });
+      const winCenter = totalBox.getCenter(new THREE.Vector3());
+      const winSize = totalBox.getSize(new THREE.Vector3());
+
+      let u = new THREE.Vector3(1, 0, 0);
+      const r = this.app?.tour?.current;
+      if (r?.wins?.[0]?.n) {
+        u.set(-r.wins[0].n.y, 0, r.wins[0].n.x);
+      } else if (winSize.z > winSize.x) {
+        u.set(0, 0, 1);
+      }
+      if (u.lengthSq() > 1e-6) u.normalize();
+      else u.set(1, 0, 0);
+
+      const winDot = winCenter.x * u.x + winCenter.z * u.z;
+      const winMinDot = Math.min(totalBox.min.x * u.x + totalBox.min.z * u.z, totalBox.max.x * u.x + totalBox.max.z * u.z);
+      const winMaxDot = Math.max(totalBox.min.x * u.x + totalBox.min.z * u.z, totalBox.max.x * u.x + totalBox.max.z * u.z);
+
+      const partStates = parts.map((p) => {
+        this._unbatchMesh(p);
+        p.updateWorldMatrix(true, false);
+        p.matrixAutoUpdate = false;
+        const pb = new THREE.Box3().setFromObject(p);
+        const pc = pb.getCenter(new THREE.Vector3());
+        const d1 = pb.min.x * u.x + pb.min.z * u.z;
+        const d2 = pb.max.x * u.x + pb.max.z * u.z;
+        const pMinDot = Math.min(d1, d2);
+        const pMaxDot = Math.max(d1, d2);
+        const pCenterDot = pc.x * u.x + pc.z * u.z;
+        // Anclar cada paño hacia su extremo exterior del vano para que se abra despejando el centro
+        const anchorDot = (pMaxDot - pMinDot > 1.8)
+          ? winMinDot
+          : (pCenterDot <= winDot ? pMinDot : pMaxDot);
+        return {
+          mesh: p,
+          anchorDot,
+          origMatrix: p.matrix.clone(),
+          origWorld: p.matrixWorld.clone(),
+          parentInv: p.parent.matrixWorld.clone().invert()
+        };
+      });
+
+      rig = {
+        open: false,
+        progress: 0,
+        u,
+        partStates,
+        tween: null
+      };
+      parts.forEach((p) => { p.userData._curtainRig = rig; });
+    }
+
+    rig.open = !rig.open;
+
+    const applyProgress = (t) => {
+      rig.progress = t;
+      if (t <= 1e-4) {
+        for (const ps of rig.partStates) {
+          ps.mesh.matrix.copy(ps.origMatrix);
+          ps.mesh.matrixWorldNeedsUpdate = true;
+          ps.mesh.updateMatrixWorld(true);
+        }
+      } else {
+        const s = 1.0 - 0.76 * t;
+        const k = s - 1.0;
+        const ux = rig.u.x, uz = rig.u.z;
+        const tmpWorld = new THREE.Matrix4();
+        const W = new THREE.Matrix4();
+        for (const ps of rig.partStates) {
+          const dotA = ps.anchorDot;
+          W.set(
+            1 + k * ux * ux, 0, k * ux * uz, -k * dotA * ux,
+            0,               1, 0,           0,
+            k * ux * uz,     0, 1 + k * uz * uz, -k * dotA * uz,
+            0,               0, 0,           1
+          );
+          tmpWorld.multiplyMatrices(W, ps.origWorld);
+          ps.mesh.matrix.multiplyMatrices(ps.parentInv, tmpWorld);
+          ps.mesh.matrixWorldNeedsUpdate = true;
+          ps.mesh.updateMatrixWorld(true);
+        }
+      }
+      const winLight = this.app?.tour?.look?.windowLights?.[0];
+      if (winLight) winLight.intensity = 1.9 + 0.95 * t;
+      if (this.highlightBox?.visible && this.selectedMesh) {
+        this.highlightBox.setFromObject(this.selectedMesh);
+      }
+      if (this.app?.renderer) this.app.renderer.shadowMap.needsUpdate = true;
+    };
+
+    rig.tween?.kill?.();
+    const targetT = rig.open ? 1 : 0;
+    if (window.gsap) {
+      rig.tween = window.gsap.to(rig, {
+        progress: targetT,
+        duration: 0.9,
+        ease: 'power2.inOut',
+        onUpdate: () => applyProgress(rig.progress)
+      });
+    } else {
+      applyProgress(targetT);
+    }
+
+    this._showToast(rig.open ? '🪟 Cortina abierta · Más luz natural' : '🪟 Cortina cerrada');
+    this._updateActionUI();
+  }
+
+  /** Enciende o apaga una lámpara, aplique, tira LED o interruptor de pared en tiempo real. */
+  toggleLamp(lampMesh) {
+    if (!lampMesh) return;
+    let rig = lampMesh.userData._lampRig;
+    if (!rig) {
+      const box = new THREE.Box3().setFromObject(lampMesh);
+      const center = box.getCenter(new THREE.Vector3());
+      const isSwitch = /faceplate|duplex_receptacle|lutron|\blite\b/i.test(lampMesh.name || '');
+      const radius = isSwitch ? 4.2 : 0.75;
+
+      const parts = [lampMesh];
+      for (const m of this.interactiveMeshes) {
+        if (m === lampMesh) continue;
+        const nm = m.name || '';
+        const matName = (Array.isArray(m.material) ? m.material[0]?.name : m.material?.name) || '';
+        const isLampCandidate = /^Luz$|Difusor_LED/i.test(matName)
+          || (/Gold_Blurry/i.test(matName) && !/Componente#2$/i.test(nm))
+          || /Componente#(3[2-9]|4[0-9]|5[0-4]|168|169|275|319|32[2367]|41[0-9]|42[0-2])|Grupo#47$|Grupo#101$|Group#(87|189|191|192)|undefined_(85[3-6]|90[2367]|1196|1205|1312|137[678]|1722|1888|1895|1961)/i.test(nm);
+        if (!isLampCandidate) continue;
+        const mc = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3());
+        if (mc.distanceTo(center) < radius) parts.push(m);
+      }
+
+      const clonedMats = [];
+      parts.forEach((p) => {
+        this._unbatchMesh(p);
+        if (!p.userData._lampMatCloned && p.material) {
+          p.userData._lampMatCloned = true;
+          p.material = Array.isArray(p.material) ? p.material.map((x) => x?.clone()) : p.material.clone();
+        }
+        const ms = Array.isArray(p.material) ? p.material : [p.material];
+        ms.forEach((m) => { if (m && !clonedMats.includes(m)) clonedMats.push(m); });
+      });
+
+      rig = {
+        on: true,
+        isSwitch,
+        center,
+        parts,
+        mats: clonedMats
+      };
+      parts.forEach((p) => { p.userData._lampRig = rig; });
+    }
+
+    rig.on = !rig.on;
+    for (const m of rig.mats) {
+      const u = (m.name || '').toUpperCase();
+      if (/^LUZ$|DIFUSOR_LED/.test(u)) {
+        m.color.setHex(rig.on ? 0xfff8eb : 0x22201d);
+        m.emissive = new THREE.Color(0xffc985);
+        m.emissiveIntensity = rig.on ? 3.2 : 0.0;
+      } else if (/GOLD/.test(u)) {
+        m.color.setHex(rig.on ? 0xd4af62 : 0x2c2211);
+        m.metalness = rig.on ? 0.90 : 0.22;
+        m.roughness = rig.on ? 0.26 : 0.78;
+        m.envMapIntensity = rig.on ? 1.1 : 0.06;
+        m.emissive = new THREE.Color(0xffb84d);
+        m.emissiveIntensity = rig.on ? 0.65 : 0.0;
+      } else {
+        m.emissive = new THREE.Color(0xffb84d);
+        m.emissiveIntensity = rig.on ? 0.35 : 0.0;
+      }
+      m.needsUpdate = true;
+    }
+
+    const tour = this.app?.tour;
+    if (tour) {
+      if (rig.isSwitch) {
+        if (tour.roomLight) tour.roomLight.intensity = rig.on ? 0.85 : 0.04;
+        if (tour.fillLight) tour.fillLight.intensity = rig.on ? 0.75 : 0.02;
+      } else {
+        if (tour.fillLight) {
+          tour.fillLight.color.setHex(0xffc478);
+          tour.fillLight.position.set(rig.center.x, rig.center.y - 0.08, rig.center.z);
+          tour.fillLight.intensity = rig.on ? 1.65 : 0.0;
+        }
+        if (tour.roomLight) {
+          tour.roomLight.intensity = rig.on ? 0.80 : 0.16;
+        }
+      }
+    }
+
+    this._showToast(rig.on ? '💡 Luminaria encendida' : '💡 Luminaria apagada');
+    this._updateActionUI();
+  }
+
+  _showToast(msg) {
+    if (!this.toastEl) return;
+    this.toastEl.textContent = msg;
+    this.toastEl.classList.add('show');
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => this.toastEl?.classList.remove('show'), 2200);
+  }
+
+  _updateActionUI() {
+    if (!this.domActionWrap) return;
+    const feat = this._classifyInteractive(this.selectedMesh);
+    if (!feat) {
+      this.domActionWrap.style.display = 'none';
+      return;
+    }
+    this.domActionWrap.style.display = 'block';
+    if (feat.type === 'door') {
+      const open = Boolean(feat.target.userData?._doorRig?.open);
+      this.domActionBtn.textContent = open ? '🚪 Cerrar Puerta' : '🚪 Abrir Puerta';
+      this.domActionBtn.onclick = () => this.toggleDoor(feat.target);
+    } else if (feat.type === 'curtain') {
+      const open = Boolean(feat.target.userData?._curtainRig?.open);
+      this.domActionBtn.textContent = open ? '🪟 Cerrar Cortina' : '🪟 Correr / Abrir Cortina';
+      this.domActionBtn.onclick = () => this.toggleCurtain(feat.target);
+    } else if (feat.type === 'lamp') {
+      const on = feat.target.userData?._lampRig ? feat.target.userData._lampRig.on : true;
+      this.domActionBtn.textContent = on ? '💡 Apagar Luminaria' : '💡 Encender Luminaria';
+      this.domActionBtn.onclick = () => this.toggleLamp(feat.target);
+    }
+  }
+
+  /** Selecciona un objeto 3D del Piso 2, ejecuta su interacción física si es puerta/cortina/lámpara y abre el Personalizador PBR. */
+  selectObject(mesh, triggerInteractive = true) {
     if (!mesh) {
       this.clearSelection();
       return;
     }
     this.selectedMesh = mesh;
+
+    const feat = this._classifyInteractive(mesh);
+    if (triggerInteractive && feat) {
+      if (feat.type === 'door') this.toggleDoor(feat.target);
+      else if (feat.type === 'curtain') this.toggleCurtain(feat.target);
+      else if (feat.type === 'lamp') this.toggleLamp(feat.target);
+    }
+
     if (!this.highlightBox) {
       this.highlightBox = new THREE.BoxHelper(mesh, 0xf2782f);
       this.highlightBox.material.depthTest = false;
@@ -645,6 +1133,7 @@ export class MaxPiso2Loader {
     const curMat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
     this.domTitle.textContent = nm;
     this.domSub.textContent = `Material actual: ${(curMat?.name || 'PBR').replace(/_/g, ' ')}`;
+    this._updateActionUI();
     this.panel.classList.add('open');
 
     // Marcar swatch activo
@@ -822,19 +1311,69 @@ export class MaxPiso2Loader {
         cursor: pointer;
       }
       .pbr-reset-btn:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+      .pbr-action-wrap {
+        display: none;
+        margin-bottom: 12px;
+      }
+      .pbr-action-btn {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid #f2782f;
+        background: linear-gradient(135deg, #f2782f 0%, #d64e12 100%);
+        color: #fff;
+        font-size: 12.5px;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 4px 14px rgba(242, 120, 47, 0.35);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .pbr-action-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 18px rgba(242, 120, 47, 0.5);
+      }
+      .pbr-toast {
+        position: fixed;
+        top: 76px;
+        left: 50%;
+        transform: translate(-50%, -12px);
+        background: rgba(16, 17, 21, 0.92);
+        border: 1px solid rgba(242, 120, 47, 0.65);
+        color: #fff;
+        padding: 8px 18px;
+        border-radius: 999px;
+        font: 600 12.5px/1.2 Inter, Roboto, system-ui, sans-serif;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        z-index: 60;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.22s ease, transform 0.22s ease;
+      }
+      .pbr-toast.show {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
     `;
     document.head.appendChild(css);
+
+    const toast = document.createElement('div');
+    toast.className = 'pbr-toast';
+    document.body.appendChild(toast);
+    this.toastEl = toast;
 
     const panel = document.createElement('div');
     panel.className = 'pbr-customizer';
     panel.innerHTML = `
       <div class="pbr-customizer__head">
         <div>
-          <span class="pbr-customizer__badge">Personalizador PBR · Piso 2</span>
+          <span class="pbr-customizer__badge">Interacción & PBR · Piso 2</span>
           <h4 class="pbr-customizer__title">Selecciona un elemento</h4>
-          <div class="pbr-customizer__sub">Haz clic en cualquier mueble o superficie</div>
+          <div class="pbr-customizer__sub">Haz clic en puertas, cortinas, luces o muebles</div>
         </div>
         <button class="pbr-customizer__close" title="Cerrar">×</button>
+      </div>
+      <div class="pbr-action-wrap">
+        <button class="pbr-action-btn">Acción interactiva</button>
       </div>
       <div class="pbr-customizer__body"></div>
       <button class="pbr-reset-btn">Restaurar material original</button>
@@ -843,6 +1382,8 @@ export class MaxPiso2Loader {
     this.panel = panel;
     this.domTitle = panel.querySelector('.pbr-customizer__title');
     this.domSub = panel.querySelector('.pbr-customizer__sub');
+    this.domActionWrap = panel.querySelector('.pbr-action-wrap');
+    this.domActionBtn = panel.querySelector('.pbr-action-btn');
 
     const body = panel.querySelector('.pbr-customizer__body');
     this.paletteCategories.forEach((cat) => {
