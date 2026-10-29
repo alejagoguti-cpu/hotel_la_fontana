@@ -222,7 +222,7 @@ export class FloorTour {
       // cielo raso en estuco blanco cálido con micro-relieve (como en los renders de referencia)
       const tl = new THREE.TextureLoader();
       const ct = (suf, srgb) => { const t = tl.load(`./assets/textures/real/cielo${suf}.webp`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(1 / 1.5, 1 / 1.5); if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
-      const mat = new THREE.MeshStandardMaterial({ map: ct('', true), normalMap: ct('_n'), roughnessMap: ct('_r'), color: 0xffffff, roughness: 1, metalness: 0, side: THREE.DoubleSide });
+      const mat = new THREE.MeshStandardMaterial({ map: ct('', true), normalMap: ct('_n'), roughnessMap: ct('_r'), color: 0xffffff, emissive: new THREE.Color(0xf4eee4), emissiveIntensity: 0.18, roughness: 0.95, metalness: 0, envMapIntensity: 0.4, side: THREE.DoubleSide });
       mat.normalScale.set(0.3, 0.3);
       this.ceiling = new THREE.Mesh(geo, mat);
       this.ceiling.position.y = P2 + CEIL;
@@ -235,7 +235,7 @@ export class FloorTour {
     // vanos: luz de día difusa con cortina translúcida (lo que se ve desde dentro)
     const winTex = this._windowTexture();
     const winMat = new THREE.MeshBasicMaterial({ map: winTex, fog: false, toneMapped: true });
-    winMat.color.setScalar(1.5); // más brillante que el interior: la luz de día "quema" y florece (bloom)
+    winMat.color.setScalar(1.25); // más brillante que el interior: la luz de día "quema" y florece (bloom)
     const frameMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b, roughness: 0.5, metalness: 0.3 });
     for (const r of this.rooms) {
       for (const w of r.wins) {
@@ -247,10 +247,10 @@ export class FloorTour {
         fr(width + 0.1, 0.06, 0, h / 2 + 0.03); fr(width + 0.1, 0.08, 0, -h / 2 - 0.04);
         fr(0.06, h + 0.1, -width / 2 - 0.03, 0); fr(0.06, h + 0.1, width / 2 + 0.03, 0); fr(0.04, h, 0, 0);
         const sill = new THREE.Mesh(new THREE.BoxGeometry(width + 0.2, 0.03, 0.2), new THREE.MeshStandardMaterial({ color: 0xe8e2d6, roughness: 0.4 }));
-        sill.position.set(0, -h / 2 - 0.08, 0.1); g.add(sill);
+        sill.position.set(0, -h / 2 - 0.08, 0.02); g.add(sill);
         // cara interior del muro de fachada, mirando hacia dentro
         const inward = new THREE.Vector3(-w.n.x, 0, -w.n.y);
-        g.position.set(w.x, P2 + 0.9 + h / 2, w.z).addScaledVector(inward, w.t / 2 + 0.03);
+        g.position.set(w.x, P2 + 0.9 + h / 2, w.z).addScaledVector(inward, Math.max(0.01, w.t / 2 - 0.04));
         g.lookAt(g.position.clone().add(inward));
         this.group.add(g);
       }
@@ -522,13 +522,14 @@ export class FloorTour {
     if (on) this.look?.enable(r || this.current); else this.look?.disable();
     this.app.revitFurniture?.setInterior(on);
     this.app.postfx?.setInterior?.(on);
-    this.roomLight.intensity = on ? (this.app.revitFurniture ? 1.2 : 6) : 0;
-    this.fillLight.intensity = on ? (this.app.revitFurniture ? 0.5 : 1.8) : 0;
+    this.roomLight.intensity = on ? 1.1 : 0;
+    this.fillLight.intensity = on ? 0.48 : 0;
     if (on && r) {
-      this.roomLight.position.set(r.pole.x, P2 + 2.15, r.pole.z);
+      this.roomLight.position.set(r.pole.x, P2 + 1.82, r.pole.z);
       const v = r.vps[0].pos;
-      this.fillLight.position.set(v.x, P2 + 2.1, v.z);
+      this.fillLight.position.set(v.x, P2 + 1.75, v.z);
     }
+    this.app.maxPiso2?.focusRoom(on, r || this.current);
   }
 
   // ------------------------------------------------------------------- UI
@@ -826,7 +827,7 @@ export class FloorTour {
     this._walk(dt);
     // el cielo raso solo aparece al cruzarlo (así el descenso no "choca" contra una losa blanca)
     const belowCeil = this.app.camera.position.y < P2 + CEIL - 0.03;
-    if (this.ceiling && this.group.visible) this.ceiling.visible = belowCeil;
+    if (this.ceiling && this.group.visible && this.ceiling.visible !== belowCeil) { this.ceiling.visible = belowCeil; if (this.app.renderer) this.app.renderer.shadowMap.needsUpdate = true; }
     this.app.maxPiso2?.setCeilingVisible(belowCeil);
     if (this.cornices && this.ceiling) this.cornices.visible = this.ceiling.visible;
     if (this.badgesOn && this.badgeEls) {

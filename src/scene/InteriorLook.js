@@ -85,7 +85,7 @@ export class InteriorLook {
     pmrem.dispose();
     // luz de día de las ventanas (2 paneles) + se crean fijas, apagadas
     this.windowLights = [0, 1].map(() => {
-      const l = new THREE.RectAreaLight(0xeaf2ff, 0, 1.2, 1.4);
+      const l = new THREE.RectAreaLight(0xfff8ed, 0, 1.2, 1.4);
       app.scene.add(l);
       return l;
     });
@@ -102,7 +102,8 @@ export class InteriorLook {
         bloom: fx?.bloom ? [fx.bloom.strength, fx.bloom.radius, fx.bloom.threshold] : null,
         grade: fx?.grade ? { c: fx.grade.uniforms.uContrast.value, s: fx.grade.uniforms.uSaturation.value, v: fx.grade.uniforms.uVignette.value, w: fx.grade.uniforms.uWarm.value.clone() } : null
       };
-      if (app.hemiLight) app.hemiLight.intensity = this._saved.hemi * 0.3;   // menos relleno plano: que mande la luz de las lámparas
+      if (app.hemiLight) app.hemiLight.intensity = this._saved.hemi * 0.38;
+      if (app.sunLight) app.sunLight.intensity = this._saved.sun * 0.16;   // menos relleno plano: que mande la luz de las lámparas
       if (fx?.bloom) { fx.bloom.strength = 0.28; fx.bloom.radius = 0.5; fx.bloom.threshold = 0.93; }
       if (fx?.grade) {
         const u = fx.grade.uniforms;
@@ -121,7 +122,7 @@ export class InteriorLook {
       l.width = Math.max(0.8, w.w); l.height = 1.4;
       l.position.set(w.x, 3.02 + 1.6, w.z).addScaledVector(inward, w.t / 2 + 0.06);
       l.lookAt(l.position.clone().add(inward));
-      l.intensity = 4.2;
+      l.intensity = 2.6;
     });
   }
 
@@ -130,6 +131,7 @@ export class InteriorLook {
     this.on = false;
     const app = this.app, fx = app.postfx, s = this._saved;
     if (app.hemiLight && s.hemi != null) app.hemiLight.intensity = s.hemi;
+    if (app.sunLight && s.sun != null) app.sunLight.intensity = s.sun;
     if (fx?.bloom && s.bloom) [fx.bloom.strength, fx.bloom.radius, fx.bloom.threshold] = s.bloom;
     if (fx?.grade && s.grade) {
       const u = fx.grade.uniforms;
