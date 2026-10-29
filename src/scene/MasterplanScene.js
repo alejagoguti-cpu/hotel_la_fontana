@@ -13,6 +13,7 @@ import { NetworksLayer } from './NetworksLayer.js';
 import { batchStatic, snapshotMatrices, movingSince } from './StaticBatcher.js';
 import { applyWind, windUniforms } from './Wind.js';
 import { RevitRoomFurniture, ROOM_INSTANCES } from './RevitRoomFurniture.js';
+import { MaxPiso2Loader } from './MaxPiso2Loader.js';
 
 export class MasterplanScene {
   constructor(container) {
@@ -57,6 +58,7 @@ export class MasterplanScene {
 
     this.buildingBuilder = new HotelBuildingBuilder(this.materials);
     this.interiorBuilder = new Piso2InteriorBuilder(this.materials);
+    this.maxPiso2 = new MaxPiso2Loader(this);
     this.roomHighlighter = new RoomHighlighter(this.scene);
     this.tour = new FloorTour(this);
     try { this.networks = new NetworksLayer(this); } catch (e) { console.warn('Capa de redes no disponible', e); }
@@ -131,9 +133,16 @@ export class MasterplanScene {
     if (this.city && this.buildingBuilder.groundPlane) this.buildingBuilder.groundPlane.visible = false;
     this.scene.add(building);
 
-    // 2. Interior Piso 2
-    const interior = this.interiorBuilder.build(arch, finishes, {}, rooms);
-    this.scene.add(interior); this.loadFurnitureLater(arch, finishes, rooms);
+    // 2. Interior Piso 2 — Modelo 1:1 Real exportado de Autodesk 3ds Max (hotel_la_fontana_piso_2.glb)
+    // Se conserva únicamente la losa base estructural del Piso 2 y se carga el GLB completo del segundo piso
+    const slabOnly = this.interiorBuilder.build({ slabLoops: arch.slabLoops, corridorCarpetLoop: arch.corridorCarpetLoop, corridorMarbleBorderLoops: arch.corridorMarbleBorderLoops, walls: [], columns: [], stairs: [] }, { wallFinishes: [] }, { items: [] }, []);
+    this.scene.add(slabOnly);
+    this.scene.add(this.maxPiso2.group);
+    this.maxPiso2.load().then(() => {
+      this.interiorBuilder.bimElements.push(...this.maxPiso2.interactiveMeshes);
+      this.shadowsDirty = true;
+      console.info('[3ds Max Piso 2] Modelo GLB cargado y alineado con éxito:', this.maxPiso2.interactiveMeshes.length, 'objetos interactivos');
+    }).catch((e) => console.error('Error cargando GLB Piso 2:', e));
 
     // 3. Room highlights
     this.roomHighlighter.build(rooms);
@@ -236,33 +245,74 @@ export class MasterplanScene {
       }
     };
 
+    let downPos = { x: 0, y: 0 };
+    this.container.addEventListener('pointerdown', (e) => { downPos = { x: e.clientX, y: e.clientY }; });
+
     const onClick = (e) => {
-      if (this.tour?.mode === 'room') return;
+      if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 6) return;
+      const rect = this.container.getBoundingClientRect();
+      this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       this.raycaster.setFromCamera(this.mouse, this.camera);
       const isBimMode = store.state.bimInspectorOpen;
 
       if (isBimMode) {
-        // Inspect BIM elements
         const hits = this.raycaster.intersectObjects(this.interiorBuilder.bimElements, true);
         if (hits.length > 0) {
-          const hit = hits[0];
-          let obj = hit.object;
+          let obj = hits[0].object;
           while (obj && !obj.userData?.bim && obj.parent) obj = obj.parent;
           if (obj && obj.userData?.bim) {
             store.setState({ selectedBimElement: obj.userData.bim });
           }
+          if (this.maxPiso2?.loaded) this.maxPiso2.selectObject(hits[0].object);
         }
-      } else if (store.state.showRoomsOverlay) {
+        return;
+      }
+
+      // En Recorrido de Habitación: clic sobre cualquier mueble o acabado del GLB abre el Personalizador PBR
+      if (this.tour?.mode === 'room' && this.maxPiso2?.loaded) {
+        const meshHits = this.raycaster.intersectObjects(this.maxPiso2.interactiveMeshes, false);
+        if (meshHits.length > 0) {
+          this.maxPiso2.selectObject(meshHits[0].object);
+        }
+        return;
+      }
+
+      if (this.tour?.mode === 'room') return;
+
+      if (store.state.showRoomsOverlay) {
         const hits = this.raycaster.intersectObjects(this.roomHighlighter.roomMeshes);
         if (hits.length > 0) {
           const hitRoom = hits[0].object.userData;
           this.selectRoom(hitRoom.roomId);
+          return;
+        }
+      }
+
+      // En Corte Piso 2 o Planta 3D: permitir seleccionar mobiliario o superficies directamente con clic
+      if ((this._mode === 'interior' || this._mode === 'top') && this.maxPiso2?.loaded) {
+        const meshHits = this.raycaster.intersectObjects(this.maxPiso2.interactiveMeshes, false);
+        if (meshHits.length > 0) {
+          this.maxPiso2.selectObject(meshHits[0].object);
         }
       }
     };
 
     this.container.addEventListener('pointermove', onPointerMove);
     this.container.addEventListener('click', onClick);
+
+    // Controles de cámara orbital 360° con flechas del teclado y zoom con +/-
+    this._orbitKeys = new Set();
+    window.addEventListener('keydown', (e) => {
+      if (this.tour?.mode === 'room' || e.target?.closest?.('input,textarea,select,[contenteditable]')) return;
+      const k = e.key.toLowerCase();
+      if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', '+', '=', '-', '_'].includes(k)) {
+        this._orbitKeys.add(k);
+        if (k.startsWith('arrow')) e.preventDefault();
+      }
+    });
+    window.addEventListener('keyup', (e) => this._orbitKeys?.delete(e.key.toLowerCase()));
+    window.addEventListener('blur', () => this._orbitKeys?.clear());
 
     // Subscribe to store updates
     store.subscribe((state) => {
@@ -443,6 +493,21 @@ export class MasterplanScene {
     const dt = Math.min(this.clock.getDelta(), 0.1);
     this.skyEnv?.update(dt);
     this.buildingBuilder?.update?.(dt);
+    if (this._orbitKeys?.size && this.tour?.mode !== 'room') {
+      const azSpeed = 1.15 * dt;
+      const polSpeed = 0.85 * dt;
+      const zoomFactor = 1.0 + 1.2 * dt;
+      const offset = this.camera.position.clone().sub(this.controls.target);
+      const sph = new THREE.Spherical().setFromVector3(offset);
+      if (this._orbitKeys.has('arrowleft')) sph.theta += azSpeed;
+      if (this._orbitKeys.has('arrowright')) sph.theta -= azSpeed;
+      if (this._orbitKeys.has('arrowup')) sph.phi = Math.max(this.controls.minPolarAngle + 0.02, sph.phi - polSpeed);
+      if (this._orbitKeys.has('arrowdown')) sph.phi = Math.min(this.controls.maxPolarAngle - 0.02, sph.phi + polSpeed);
+      if (this._orbitKeys.has('+') || this._orbitKeys.has('=')) sph.radius = Math.max(this.controls.minDistance, sph.radius / zoomFactor);
+      if (this._orbitKeys.has('-') || this._orbitKeys.has('_')) sph.radius = Math.min(this.controls.maxDistance, sph.radius * zoomFactor);
+      offset.setFromSpherical(sph);
+      this.camera.position.copy(this.controls.target).add(offset);
+    }
     this.controls.update();
     this._clampPivot();
     this._updateRange();

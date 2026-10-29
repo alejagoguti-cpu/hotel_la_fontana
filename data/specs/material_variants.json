@@ -1,0 +1,245 @@
+{
+  "project": "Hotel Estelar La Fontana - Piso 2",
+  "standard": "glTF 2.0 Metallic-Roughness",
+  "note": "Unicamente materiales y texturas reales existentes en la escena de 3ds Max, sin inventar variantes inexistentes.",
+  "customizableCategories": {
+    "maderas_carpinteria_y_enchapes": {
+      "description": "Acabados de madera para cabeceros, escritorios, mesas de noche, closets, puertas y porticos",
+      "existingMaterialsInGLB": [
+        {
+          "name": "Sikuani___Primadera",
+          "texture": "92_Texture_1.jpg",
+          "roughness": 0.38,
+          "metallic": 0
+        },
+        {
+          "name": "Madera_Negra___Carpinter_a",
+          "texture": "138_Texture_1.jpg",
+          "roughness": 0.38,
+          "metallic": 0
+        },
+        {
+          "name": "LF_PASILLO_PORTICO_MADERA_PBR",
+          "texture": "148_Large_1.jpg",
+          "roughness": 0.35,
+          "metallic": 0
+        },
+        {
+          "name": "P2_PBR_Sikuani_Puertas_Referencia",
+          "texture": "92_Texture_1.jpg",
+          "roughness": 0.5,
+          "metallic": 0
+        }
+      ]
+    },
+    "tapizados_poltronas_sillas_y_sofas": {
+      "description": "Textiles y cueros reales de la escena para poltronas, sillas de escritorio, sofas y cojines",
+      "existingMaterialsInGLB": [
+        {
+          "name": "Plain_Grey_Jacquard_2882279_24cm",
+          "texture": "207_7637787a_Diff_4k_srgb_1.jpg",
+          "roughness": 0.85,
+          "metallic": 0
+        },
+        {
+          "name": "Fabric_Bolt_Pine",
+          "texture": "202_Large_sRVpVcl_1.jpg",
+          "roughness": 0.85,
+          "metallic": 0
+        },
+        {
+          "name": "Velvet_03_Blue_6cm",
+          "texture": "71_Texture_1.jpg",
+          "roughness": 0.85,
+          "metallic": 0
+        },
+        {
+          "name": "Plain_Natural_Texture_26193580_28cm",
+          "texture": "148_Large_1.jpg",
+          "roughness": 0.85,
+          "metallic": 0
+        },
+        {
+          "name": "Leather_Worn_Brown_100cm",
+          "texture": "187_Texture_1.jpg",
+          "roughness": 0.48,
+          "metallic": 0
+        },
+        {
+          "name": "Leather_Worn_Black_100cm",
+          "texture": "251_300eed79_Diff_4k_srgb_1.jpg",
+          "roughness": 0.48,
+          "metallic": 0
+        },
+        {
+          "name": "PBR_Cojines_Coral",
+          "texture": null,
+          "baseColorRGB": [
+            186,
+            113,
+            92
+          ],
+          "roughness": 0.87,
+          "metallic": 0
+        }
+      ]
+    },
+    "piedras_y_mesones": {
+      "description": "Marmoles y piedras sinterizadas de mesones de bano, mesas auxiliares y barras",
+      "existingMaterialsInGLB": [
+        {
+          "name": "Neolith_Amazonico",
+          "texture": "169_Amazonico_1.jpg",
+          "roughness": 0.25,
+          "metallic": 0
+        },
+        {
+          "name": "Silver_Blue",
+          "texture": "224_SIlver-Blue-Detalle_1.jpg",
+          "roughness": 0.25,
+          "metallic": 0
+        },
+        {
+          "name": "Santorini_Grey",
+          "texture": "217_Texture_1.jpg",
+          "roughness": 0.58,
+          "metallic": 0
+        }
+      ]
+    },
+    "pisos_y_alfombras": {
+      "description": "Pisos de madera, tapetes de habitaciones y alfombra de pasillo",
+      "existingMaterialsInGLB": [
+        {
+          "name": "Flooring_Parquet_Parallel_E01_120cm",
+          "texture": "82_e7301685_Diff_4k_srgb_1.jpg",
+          "roughness": 0.38,
+          "metallic": 0
+        },
+        {
+          "name": "Carpet_A02_100cm",
+          "texture": "182_Gemini_Generated_Image_o511ifo511ifo511_1.png",
+          "roughness": 0.85,
+          "metallic": 0
+        },
+        {
+          "name": "Carpet_A02_100cm_1",
+          "texture": "241_0_Imagen1_1.png",
+          "roughness": 0.85,
+          "metallic": 0
+        },
+        {
+          "name": "P2_PBR_Alfombra_Abstracta_Ocre_Carbon",
+          "texture": "baked_alfombra_abstracta_ocre_carbon.png",
+          "roughness": 0.9,
+          "metallic": 0
+        }
+      ]
+    },
+    "revestimientos_muros_y_papeles": {
+      "description": "Papeles de colgadura Vescom y pinturas arquitectonicas",
+      "existingMaterialsInGLB": [
+        {
+          "name": "Papel_Colgadua_Lismore",
+          "texture": "112_0_lismore-109728-highres_1.jpg",
+          "roughness": 0.85,
+          "metallic": 0
+        },
+        {
+          "name": "P2_PBR_Papel_Lino_Beige",
+          "texture": "112_0_lismore-109728-highres_1.jpg",
+          "roughness": 0.83,
+          "metallic": 0
+        },
+        {
+          "name": "Pintura_Sobre_las_nubes",
+          "texture": null,
+          "baseColorRGB": [
+            206,
+            197,
+            192
+          ],
+          "roughness": 0.8,
+          "metallic": 0
+        }
+      ]
+    },
+    "metales_y_herrajes": {
+      "description": "Estructuras metalicas de mobiliario, lamparas, griferias y herrajes",
+      "existingMaterialsInGLB": [
+        {
+          "name": "Iron_Blurry_Negro",
+          "texture": null,
+          "baseColorRGB": [
+            28,
+            28,
+            28
+          ],
+          "roughness": 0.35,
+          "metallic": 0.7
+        },
+        {
+          "name": "P2_PBR_Herrajes_Negro",
+          "texture": null,
+          "baseColorRGB": [
+            16,
+            14,
+            12
+          ],
+          "roughness": 0.3,
+          "metallic": 0.75
+        },
+        {
+          "name": "Gold_Blurry",
+          "texture": null,
+          "baseColorRGB": [
+            250,
+            230,
+            171
+          ],
+          "roughness": 0.26,
+          "metallic": 1
+        },
+        {
+          "name": "Aluminum_Polished",
+          "texture": null,
+          "baseColorRGB": [
+            244,
+            245,
+            246
+          ],
+          "roughness": 0.02,
+          "metallic": 1
+        },
+        {
+          "name": "Aluminium_Brushed_Distorted_15cm",
+          "texture": null,
+          "baseColorRGB": [
+            244,
+            245,
+            246
+          ],
+          "roughness": 0.26,
+          "metallic": 1
+        },
+        {
+          "name": "Aluminum_Anodized_Clear",
+          "texture": null,
+          "baseColorRGB": [
+            229,
+            229,
+            223
+          ],
+          "roughness": 0.26,
+          "metallic": 1
+        },
+        {
+          "name": "MARTILLADO",
+          "texture": "157_Texture_1.jpg",
+          "roughness": 0.48,
+          "metallic": 0
+        }
+      ]
+    }
+  }
+}

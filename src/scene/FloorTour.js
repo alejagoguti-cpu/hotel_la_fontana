@@ -231,8 +231,7 @@ export class FloorTour {
       this.group.add(this.ceiling);
     }
     this._buildCornices();
-    try { this.doors = new RoomDoors(this.app, this); this.group.add(this.doors.build(this.app.materials, this.rooms)); this.doors.attach(); } catch (e) { console.warn('puertas', e); }
-    try { this.bath = buildBathroomDetails(this.app.materials, this.group, this.rooms); this.bathLights = this.bath.userData.lights; if (this.bathLights) this.bathLights.matrixAutoUpdate = false; } catch (e) { console.warn('baño', e); }
+    // Las puertas y baños equipados ya vienen 1:1 en el GLB exportado de 3ds Max
     // vanos: luz de día difusa con cortina translúcida (lo que se ve desde dentro)
     const winTex = this._windowTexture();
     const winMat = new THREE.MeshBasicMaterial({ map: winTex, fog: false, toneMapped: true });
@@ -601,7 +600,7 @@ export class FloorTour {
       <button class="ft-arrow prev" data-act="prev" title="Habitación anterior">‹</button>
       <button class="ft-arrow next" data-act="next" title="Habitación siguiente">›</button>
       <div class="ft-tabs"></div>
-      <div class="ft-hint">Arrastra para mirar · <b>W A S D</b> o flechas para caminar · Shift corre · Q/E giran</div>
+      <div class="ft-hint">Arrastra para mirar · <b>W A S D</b> o flechas para caminar · <b>Clic en un mueble</b> para cambiar su material PBR</div>
       <div class="ft-map"><canvas width="420" height="300"></canvas><div class="r-mapname"></div></div>
       <div class="ft-card"></div>`);
     this.dom = { veil, badges, plan, room, tabs: room.querySelector('.ft-tabs'), card: room.querySelector('.ft-card'), map: room.querySelector('canvas'), hint: room.querySelector('.ft-hint') };
